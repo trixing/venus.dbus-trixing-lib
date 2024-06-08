@@ -74,7 +74,10 @@ class DbusTrixingService:
     log.info("Registered %s  with DeviceInstance = %d" % (servicename, self.device_instance))
 
     # Create the management objects, as specified in the ccgx dbus-api document
-    self._dbusservice.add_path('/Mgmt/ProcessName', __file__)
+    procpath = os.path.join('/proc', str(os.getpid()), 'cmdline')
+    cmd = [os.path.basename(c) for c in open(procpath).read().split('\x00')]
+    log.info("Process Name %s", ' '.join(cmd))
+    self._dbusservice.add_path('/Mgmt/ProcessName', ' '.join(cmd))
     self._dbusservice.add_path('/Mgmt/ProcessVersion', version)
     self._dbusservice.add_path('/Mgmt/Connection', connection)
 
