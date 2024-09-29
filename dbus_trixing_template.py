@@ -183,7 +183,19 @@ class DbusTrixingPvInverter(DbusTrixingService):
     self._dbusservice.add_path('/StatusCode', 0)  # No Error
     self._dbusservice.add_path('/Ac/PowerLimit', None, gettextcallback=self._w)
 
+    self.trackers = 0
+    self._dbusservice.add_path('/NrOfTrackers', self.trackers)
     self.add_power_paths()
+
+  def add_tracker(self):
+    n = self.trackers
+    self._dbusservice.add_path('/Pv/%d/V' % n, None)
+    self._dbusservice.add_path('/Pv/%d/P' % n, None)
+    self._dbusservice.add_path('/Pv/%d/Name' % n, None)
+    self._dbusservice.add_path('/Pv/%d/Yield/System' % n, None)
+    self._dbusservice.add_path('/Pv/%d/MppOperationMode' % n, None)
+    self.trackers += 1
+    self['/NrOfTrackers'] = self.trackers
 
 
 class DbusTrixingTemperature(DbusTrixingService):
@@ -196,6 +208,20 @@ class DbusTrixingTemperature(DbusTrixingService):
 
   def set_temperature(self, temperature):
     self['/Temperature'] = temperature
+
+
+class DbusTrixingEnergyMeter(DbusTrixingService):
+  def __init__(self, devicename, role='acload', position=0, **kwargs):
+    super().__init__(role, devicename,
+                     **kwargs)
+    # 0: AC-in, 1: AC-out
+    self._dbusservice.add_path('/Position', position)
+    # pvinverter, grid, acsensor
+    role_names = ['grid', 'pvinverter', 'genset', 'acload']
+    self._dbusservice.add_path('/Role', role)
+    self._dbusservice.add_path('/AllowedRoles', role_names)
+    self.add_power_paths()
+
 
 
 def prepare():
