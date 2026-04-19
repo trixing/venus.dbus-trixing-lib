@@ -7,6 +7,10 @@ import logging
 import platform
 import traceback
 
+import faulthandler
+import threading
+import time
+
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), '/opt/victronenergy/dbus-systemcalc-py/ext/velib_python'))
 from vedbus import VeDbusService
 from settingsdevice import SettingsDevice
@@ -33,6 +37,30 @@ def dbusconnection():
 
 
 
+class Watchdog:
+    def __init__(self, timeout=30):
+        self.time = None
+        self.timeout = timeout
+
+    def update(self):
+        self.time = time.time()
+
+    def run(self):
+        while True:
+            if time.time() - self.time > self.timeout:
+                log.error('Watchdog timeout')
+                faulthandler.dump_traceback()
+                os._exit(1)
+
+            time.sleep(self.timeout)
+
+    def start(self):
+        self.update()
+        t = threading.Thread(target=self.run)
+        t.daemon = True
+        t.start()
+
+
 class DbusTrixingService:
 
   def _set_up_device_instance(self, servicename, instance):
@@ -57,11 +85,13 @@ class DbusTrixingService:
   def __init__(self, deviceclass, devicename,
                displayname=None, deviceinstance=None,
                firmwareversion=None, hardwareversion=None,
-               serial=None, version=None, connection=None):
+               serial=None, version=None, connection=None,
+               register=None):
     servicename = 'com.victronenergy.' + deviceclass + '.' + devicename
+    self.watchdog = Watchdog()
     self._deviceclass = deviceclass
     bus = dbusconnection()
-    self._dbusservice = VeDbusService(servicename, bus=bus)
+    self._dbusservice = VeDbusService(servicename, bus=bus, register=register)
     self._settings = SettingsDevice(bus=bus,
                                     supportedSettings={},
                                     eventCallback=self._handle_changed_setting)
@@ -97,6 +127,9 @@ class DbusTrixingService:
 
 
     self._retries = 0
+
+  def register(self):
+    self._dbusservice.register()
 
   def schedule(self, timeout=5000):
     gobject.timeout_add(timeout, self._safe_update)
@@ -161,12 +194,13 @@ class DbusTrixingService:
             self.connect() 
         self._retries = 0
     except Exception as exc:
-        tb_str = traceback.format_exception(etype=type(exc), value=exc, tb=exc.__traceback__)
+        tb_str = ''.join(traceback.format_exception(exc, value=exc, tb=exc.__traceback__))
 
         log.error('Error running update, try %d: %s' % (self._retries, tb_str))
         self._retries += 1
         if self._retries == 12:
             self.disconnect()
+    self.watchdog.update()
     return True
 
   def update(self):
@@ -200,11 +234,12 @@ class DbusTrixingPvInverter(DbusTrixingService):
 
 class DbusTrixingTemperature(DbusTrixingService):
   def __init__(self, devicename, **kwargs):
-    super().__init__('temperature', devicename,
+    super().__init__('temperature', devicename, register=False,
                      **kwargs)
     self._dbusservice.add_path('/TemperatureType', 2)  # 0=battery, 1=fridge, 2=generic
     self._dbusservice.add_path('/Temperature', None, gettextcallback=self._c)
     self._dbusservice.add_path('/Status', 0)  # 0=ok, 1=disconnected, 2=short circuit
+    self.register()
 
   def set_temperature(self, temperature):
     self['/Temperature'] = temperature
@@ -221,6 +256,21 @@ class DbusTrixingEnergyMeter(DbusTrixingService):
     self._dbusservice.add_path('/Role', role)
     self._dbusservice.add_path('/AllowedRoles', role_names)
     self.add_power_paths()
+    self.register()
+
+
+class DbusTrixingHeatpump(DbusTrixingService):
+  def __init__(self, devicename, **kwargs):
+    super().__init__('heatpump', devicename,
+                     **kwargs)
+    # http://github.com/victronenergy/venus/wiki/dbus#heatpump
+    self._dbusservice.add_path('/Temperature', None, gettextcallback=self._c)
+    self._dbusservice.add_path('/TargetTemperature', None, gettextcallback=self._c)
+    self._dbusservice.add_path('/State', None)
+    self.register()
+
+  def set_temperature(self, temperature):
+    self['/Temperature'] = temperature
 
 
 
