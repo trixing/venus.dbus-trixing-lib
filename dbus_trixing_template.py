@@ -1,6 +1,4 @@
 
-from gi.repository import GLib as gobject
-import dbus
 import sys
 import os
 import logging
@@ -11,29 +9,89 @@ import faulthandler
 import threading
 import time
 
-sys.path.insert(1, os.path.join(os.path.dirname(__file__), '/opt/victronenergy/dbus-systemcalc-py/ext/velib_python'))
-from vedbus import VeDbusService
-from settingsdevice import SettingsDevice
+try:
+    from gi.repository import GLib as gobject
+    import dbus
+    sys.path.insert(1, os.path.join(os.path.dirname(__file__), '/opt/victronenergy/dbus-systemcalc-py/ext/velib_python'))
+    from vedbus import VeDbusService
+    from settingsdevice import SettingsDevice
+    _HAVE_DBUS = True
+except Exception:
+    _HAVE_DBUS = False
+
+    class _StubGLib:
+        def timeout_add(self, ms, cb):
+            def _loop():
+                while True:
+                    time.sleep(ms / 1000.0)
+                    if not cb():
+                        return
+            threading.Thread(target=_loop, daemon=True).start()
+        def MainLoop(self):
+            return self
+        def run(self):
+            while True:
+                time.sleep(3600)
+
+    gobject = _StubGLib()
+
+    class _StubSetting:
+        def __init__(self, value):
+            self._value = value
+        def get_value(self):
+            return self._value
+
+    class SettingsDevice:
+        def __init__(self, bus=None, supportedSettings=None, eventCallback=None):
+            self._d = {}
+        def addSetting(self, path, default, *args):
+            self._d[path] = default
+            return _StubSetting(default)
+        def addSettings(self, settings):
+            for key, (path, default, *_) in settings.items():
+                self._d[key] = default
+        def __getitem__(self, key):
+            return self._d.get(key, '')
+        def __setitem__(self, key, value):
+            self._d[key] = value
+
+    class VeDbusService:
+        def __init__(self, service_name, bus=None, register=None):
+            self._name = service_name
+            self._paths = {}
+        def add_path(self, path, value, gettextcallback=None, writeable=False, onchangecallback=None):
+            self._paths[path] = value
+        def register(self):
+            log.info('Stub: registered %s', self._name)
+        def __setitem__(self, path, value):
+            old = self._paths.get(path)
+            self._paths[path] = value
+            if old != value:
+                log.info('%-30s = %s', path, value)
+        def __getitem__(self, path):
+            return self._paths.get(path)
+
+    def dbusconnection():
+        return None
 
 try:
-    import thread   # for daemon = True
+    import thread
 except ImportError:
     pass
 
 log = logging.getLogger("DbusTrixingTemplate")
 
-class SystemBus(dbus.bus.BusConnection):
-    def __new__(cls):
-        return dbus.bus.BusConnection.__new__(cls, dbus.bus.BusConnection.TYPE_SYSTEM)
+if _HAVE_DBUS:
+    class SystemBus(dbus.bus.BusConnection):
+        def __new__(cls):
+            return dbus.bus.BusConnection.__new__(cls, dbus.bus.BusConnection.TYPE_SYSTEM)
 
+    class SessionBus(dbus.bus.BusConnection):
+        def __new__(cls):
+            return dbus.bus.BusConnection.__new__(cls, dbus.bus.BusConnection.TYPE_SESSION)
 
-class SessionBus(dbus.bus.BusConnection):
-    def __new__(cls):
-        return dbus.bus.BusConnection.__new__(cls, dbus.bus.BusConnection.TYPE_SESSION)
-
-
-def dbusconnection():
-    return SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else SystemBus()
+    def dbusconnection():
+        return SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ else SystemBus()
 
 
 
@@ -104,8 +162,11 @@ class DbusTrixingService:
     log.info("Registered %s  with DeviceInstance = %d" % (servicename, self.device_instance))
 
     # Create the management objects, as specified in the ccgx dbus-api document
-    procpath = os.path.join('/proc', str(os.getpid()), 'cmdline')
-    cmd = [os.path.basename(c) for c in open(procpath).read().split('\x00')]
+    try:
+        procpath = os.path.join('/proc', str(os.getpid()), 'cmdline')
+        cmd = [os.path.basename(c) for c in open(procpath).read().split('\x00')]
+    except OSError:
+        cmd = [os.path.basename(sys.argv[0])]
     log.info("Process Name %s", ' '.join(cmd))
     self._dbusservice.add_path('/Mgmt/ProcessName', ' '.join(cmd))
     self._dbusservice.add_path('/Mgmt/ProcessVersion', version)
@@ -284,20 +345,23 @@ def prepare():
   handler.setFormatter(formatter)
   root.addHandler(handler)
 
+  if not _HAVE_DBUS:
+    log.info('dbus/gi not available — running in stub mode')
+    return
 
   try:
-    thread.daemon = True # allow the program to quit
+    thread.daemon = True
   except NameError:
     pass
 
   from dbus.mainloop.glib import DBusGMainLoop
-  # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
   DBusGMainLoop(set_as_default=True)
   log.info('Early Setup complete')
 
 
 def run():
-  log.info('Connected to dbus, and switching over to gobject.MainLoop() (= event based)')
+  if _HAVE_DBUS:
+    log.info('Connected to dbus, switching to gobject.MainLoop()')
   mainloop = gobject.MainLoop()
   mainloop.run()
 
