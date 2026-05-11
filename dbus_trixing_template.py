@@ -249,7 +249,7 @@ class DbusTrixingEnergyMeter(DbusTrixingService):
   def __init__(self, devicename, role='acload', position=0, **kwargs):
     super().__init__(role, devicename,
                      **kwargs)
-    # 0: AC-in, 1: AC-out
+    # 1: AC-in, 0: AC-out
     self._dbusservice.add_path('/Position', position)
     # pvinverter, grid, acsensor
     role_names = ['grid', 'pvinverter', 'genset', 'acload']
